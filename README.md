@@ -1,9 +1,11 @@
 
-# Budget Wise
+# 💲Budget Wise
 
 <img src="https://raw.githubusercontent.com/TheGuyCheese/budget-wise/refs/heads/main/dashboard.png" />
 
 A powerful, modern dashboard application built with Next.js 14, featuring authentication, real-time data visualization, and a streamlined user experience.
+
+### [Deployment Link](https://www.bwise.vercel.app)
 
 ## ✨ Key Features
 
