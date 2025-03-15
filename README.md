@@ -37,9 +37,6 @@ A powerful, modern dashboard application built with Next.js 14, featuring authen
 ### 🤖 AI Support
 - **Integrated AI chat bot**
 - **Real Time AI Chat**
-- **Expense Categories**
-- **Income Management**
-- **Transaction History**
 
 
 ## 🚀 Quick Start
