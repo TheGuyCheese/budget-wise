@@ -1,114 +1,133 @@
-// src/app/api/chat/route.ts
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { currentUser } from "@clerk/nextjs/server";
+import prisma from "@/lib/prisma";
+import { NextRequest, NextResponse } from "next/server";
+import { GetFormatterForCurrency } from "@/lib/helpers";
 
-import { NextRequest, NextResponse } from 'next/server';
-import { BudgetRAGSystem } from '@/lib/rag/budgetDataRetriever';
-import { auth } from '@clerk/nextjs/server'; // Assuming you're using Clerk for auth, adjust as needed
-import { GoogleGenerativeAI } from '@google/generative-ai';
+// Initialize Gemini API
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
-// Initialize Gemini API for general queries
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
-
-// Detect if a query is budget-related
-function isBudgetQuery(message: string): boolean {
-  const budgetKeywords = [
-    'my budget', 'my spending', 'my expenses', 'my income',
-    'how much did i spend', 'how much have i spent', 'my balance',
-    'my account', 'my savings', 'my finances', 'my transactions',
-    'my categories', 'spend on', 'spent on', 'this month', 'last month'
-  ];
-  
-  const lowercaseMessage = message.toLowerCase();
-  
-  return budgetKeywords.some(keyword => lowercaseMessage.includes(keyword));
-}
-
-export async function POST(req: NextRequest) {
+export async function POST(request: NextRequest) {
   try {
-    // Get authenticated user
-    const { userId } = auth();
-    
-    if (!userId) {
-      return NextResponse.json(
-        { error: "Unauthorized" },
-        { status: 401 }
-      );
+    // Get current user
+    const user = await currentUser();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    
-    // Parse request
-    const { message, history } = await req.json();
-    
+
+    // Parse request body
+    const body = await request.json();
+    const { message, history } = body;
+
     if (!message) {
+      return NextResponse.json({ error: "Message is required" }, { status: 400 });
+    }
+
+    try {
+      // Get model
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      
+      // For simple text generation without chat history
+      const prompt = `You are a helpful budget assistant. Answer the following question about finances: ${message}`;
+      const result = await model.generateContent(prompt);
+      const response = result.response.text();
+      
+      return NextResponse.json({ response });
+    } catch (error: any) {
+      console.error("Gemini API error:", error);
       return NextResponse.json(
-        { error: "Message is required" },
-        { status: 400 }
+        { error: "Failed to generate response from AI", details: error?.message || "Unknown error" },
+        { status: 500 }
       );
     }
-    
-    let response;
-    
-    // Check if this is a budget-specific query
-    if (isBudgetQuery(message)) {
-      // Initialize the budget RAG system
-      const budgetRag = new BudgetRAGSystem(userId);
-      
-      // Get personalized response based on user's budget data
-      const budgetResponse = await budgetRag.answerBudgetQuery(message);
-      response = budgetResponse.answer;
-    } else {
-      // For general financial advice, use the LLM directly
-      response = await getGeneralFinancialAdvice(message, history);
-    }
-    
-    return NextResponse.json({ response });
-  } catch (error) {
-    console.error("Error processing chat request:", error);
+  } catch (error: any) {
+    console.error("Chat API error:", error);
     return NextResponse.json(
-      { error: "Failed to process request" },
+      { error: "Failed to process request", details: error?.message || "Unknown error" },
       { status: 500 }
     );
   }
 }
 
-// Handle general financial questions
-async function getGeneralFinancialAdvice(message: string, history: any[]): Promise<string> {
+// Function to fetch user's budget data - will be used in the enhanced version
+async function fetchUserBudgetData(userId: string) {
   try {
-    // Format conversation history for Gemini
-    const formattedHistory = history.map(msg => ({
-      role: msg.role === 'user' ? 'user' : 'model',
-      parts: [{ text: msg.content }]
-    }));
-    
-    // Create a system prompt
-    const systemPrompt = {
-      role: 'model',
-      parts: [{ text: "You are a helpful budget assistant providing general financial advice. You provide concise, practical financial guidance and budgeting tips." }]
-    };
-    
-    // Combine system prompt with history
-    const chatHistory = [systemPrompt, ...formattedHistory];
-    
-    // Add the user's current message
-    chatHistory.push({
-      role: 'user',
-      parts: [{ text: message }]
+    // Get user settings for currency formatting
+    const userSettings = await prisma.userSettings.findUnique({
+      where: { userId },
     });
+
+    if (!userSettings) {
+      return { error: "User settings not found" };
+    }
+
+    const formatter = GetFormatterForCurrency(userSettings.currency);
+
+    // Get recent transactions (last 30 days)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     
-    // Get model from Gemini
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    
-    // Create chat session
-    const chat = model.startChat({
-      history: chatHistory,
-      generationConfig: {
-        maxOutputTokens: 1000,
+    const transactions = await prisma.transaction.findMany({
+      where: {
+        userId,
+        date: {
+          gte: thirtyDaysAgo,
+        },
+      },
+      orderBy: {
+        date: "desc",
       },
     });
+
+    // Get categories
+    const categories = await prisma.category.findMany({
+      where: {
+        userId,
+      },
+    });
+
+    // Calculate summary statistics
+    const totalIncome = transactions
+      .filter(t => t.type === "income")
+      .reduce((sum, t) => sum + t.amount, 0);
     
-    // Generate response
-    const result = await chat.sendMessage(message);
-    return result.response.text();
-  } catch (error) {
-    console.error("Error getting general financial advice:", error);
-    return "I'm sorry, I'm having trouble providing financial advice at the moment. Please try again later.";
+    const totalExpense = transactions
+      .filter(t => t.type === "expense")
+      .reduce((sum, t) => sum + t.amount, 0);
+    
+    const netBalance = totalIncome - totalExpense;
+
+    // Group expenses by category
+    const expensesByCategory: Record<string, number> = {};
+    transactions
+      .filter(t => t.type === "expense")
+      .forEach(t => {
+        if (!expensesByCategory[t.category]) {
+          expensesByCategory[t.category] = 0;
+        }
+        expensesByCategory[t.category] += t.amount;
+      });
+
+    return {
+      userSettings,
+      recentTransactions: transactions.map(t => ({
+        ...t,
+        formattedAmount: formatter.format(t.amount),
+      })),
+      categories,
+      summary: {
+        totalIncome: formatter.format(totalIncome),
+        totalExpense: formatter.format(totalExpense),
+        netBalance: formatter.format(netBalance),
+        expensesByCategory: Object.entries(expensesByCategory).map(([category, amount]) => ({
+          category,
+          amount: formatter.format(amount),
+        })),
+        currency: userSettings.currency,
+      },
+    };
+  } catch (error: any) {
+    console.error("Error fetching user budget data:", error);
+    return { error: "Failed to fetch budget data", details: error?.message || "Unknown error" };
   }
 }
