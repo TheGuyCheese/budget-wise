@@ -48,7 +48,7 @@ A powerful, modern dashboard application built with Next.js 14, featuring authen
 ```bash
 Node.js 18+
 PostgreSQL
-pnpm (recommended)
+bun (recommended)
 ```
 
 ### Installation Steps 🛠️
@@ -57,7 +57,7 @@ pnpm (recommended)
 ```bash
 git clone https://github.com/yourusername/modern-budget-dashboard
 cd modern-budget-dashboard
-pnpm install
+bun install
 ```
 
 2. **Environment Setup**
@@ -68,13 +68,13 @@ cp .env.example .env.local
 
 3. **Database Setup**
 ```bash
-pnpm prisma generate
-pnpm prisma db push
+bun prisma generate
+bun prisma db push
 ```
 
 4. **Launch**
 ```bash
-pnpm dev
+bun dev
 ```
 
 ## 🛠️ Tech Stack
